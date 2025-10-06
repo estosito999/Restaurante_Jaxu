@@ -19,34 +19,60 @@ class Empleado extends BaseModel {
 
     /** Crea empleado (hash de password si se provee) */
     public function create(array $data): int {
-        $sql = "INSERT INTO empleado (nombre,apellido,ci,puesto,password_hash,rol)
-                VALUES (?,?,?,?,?,?)";
-        $st = $this->db->prepare($sql);
-        $hash = !empty($data['password']) ? password_hash($data['password'], PASSWORD_BCRYPT) : null;
+        // siempre genera hash al crear
+        $hash = password_hash($data['password'], PASSWORD_BCRYPT);
+
+        $st = $this->db->prepare("INSERT INTO empleado (nombre, apellido, ci, puesto, sueldo, password_hash, rol)
+                                VALUES (?,?,?,?,?,?,?)");
         $st->execute([
             $data['nombre'],
-            $data['apellido'] ?: '',
+            $data['apellido'],
             $data['ci'],
-            $data['puesto'] ?: '',
+            $data['puesto'],
+            $data['sueldo'],
             $hash,
-            $data['rol'],
+            $data['rol']
         ]);
         return (int)$this->db->lastInsertId();
     }
 
+
     /** Actualiza datos (sin password) */
     public function update(int $id, array $data): bool {
-        $sql = "UPDATE empleado SET nombre=?, apellido=?, ci=?, puesto=?, rol=? WHERE id_empleado=?";
-        $st = $this->db->prepare($sql);
-        return $st->execute([
-            $data['nombre'],
-            $data['apellido'] ?: '',
-            $data['ci'],
-            $data['puesto'] ?: '',
-            $data['rol'],
-            $id
-        ]);
+        // si viene password, lo actualizamos, si no, se deja el hash actual
+        if (!empty($data['password'])) {
+            $hash = password_hash($data['password'], PASSWORD_BCRYPT);
+            $sql = "UPDATE empleado 
+                    SET nombre=?, apellido=?, ci=?, puesto=?, sueldo=?, rol=?, password_hash=? 
+                    WHERE id_empleado=?";
+            $st = $this->db->prepare($sql);
+            return $st->execute([
+                $data['nombre'],
+                $data['apellido'],
+                $data['ci'],
+                $data['puesto'],
+                $data['sueldo'],
+                $data['rol'],
+                $hash,
+                $id
+            ]);
+        } else {
+            $sql = "UPDATE empleado 
+                    SET nombre=?, apellido=?, ci=?, puesto=?, sueldo=?, rol=? 
+                    WHERE id_empleado=?";
+            $st = $this->db->prepare($sql);
+            return $st->execute([
+                $data['nombre'],
+                $data['apellido'],
+                $data['ci'],
+                $data['puesto'],
+                $data['sueldo'],
+                $data['rol'],
+                $id
+            ]);
+        }
     }
+
 
     /** Cambia contraseña */
     public function updatePassword(int $id, string $password): bool {

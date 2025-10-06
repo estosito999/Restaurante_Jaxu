@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 01-10-2025 a las 04:41:41
+-- Tiempo de generación: 04-10-2025 a las 15:11:38
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -92,6 +92,7 @@ CREATE TABLE `empleado` (
   `apellido` varchar(50) NOT NULL,
   `ci` varchar(20) NOT NULL,
   `puesto` varchar(20) NOT NULL,
+  `sueldo` decimal(10,2) NOT NULL DEFAULT 0.00,
   `password_hash` varchar(255) DEFAULT NULL,
   `rol` enum('admin','cajero','mesero','cocinero') NOT NULL DEFAULT 'cajero'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -100,8 +101,8 @@ CREATE TABLE `empleado` (
 -- Volcado de datos para la tabla `empleado`
 --
 
-INSERT INTO `empleado` (`id_empleado`, `nombre`, `apellido`, `ci`, `puesto`, `password_hash`, `rol`) VALUES
-(1, 'Josepo', 'Coteja', '12345678', 'cajero', '4321', 'cajero');
+INSERT INTO `empleado` (`id_empleado`, `nombre`, `apellido`, `ci`, `puesto`, `sueldo`, `password_hash`, `rol`) VALUES
+(1, 'Josepo', 'Coteja', '12345678', 'cajero', 0.00, '4321', 'cajero');
 
 -- --------------------------------------------------------
 
@@ -133,8 +134,8 @@ CREATE TABLE `factura` (
 CREATE TABLE `plato` (
   `id_plato` int(11) NOT NULL,
   `nombre` varchar(100) NOT NULL,
-  `descripcion` varchar(255) DEFAULT NULL,
   `precio` decimal(10,2) NOT NULL,
+  `stock` int(11) NOT NULL DEFAULT 0,
   `categoria` varchar(50) NOT NULL,
   `id_cocinero` int(11) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

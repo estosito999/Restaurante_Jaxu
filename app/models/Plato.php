@@ -41,23 +41,32 @@ class Plato extends BaseModel {
     }
 
     public function create(array $data): int {
-        $st = $this->db->prepare("INSERT INTO plato(nombre,descripcion,precio,categoria,id_cocinero)
-                                  VALUES(?,?,?,?,?)");
+        $st = $this->db->prepare("INSERT INTO plato(nombre, precio, stock, categoria, id_cocinero)
+                                VALUES(?,?,?,?,?)");
         $st->execute([
-            $data['nombre'], $data['descripcion'], $data['precio'],
-            $data['categoria'], $data['id_cocinero']
+            $data['nombre'],
+            $data['precio'],
+            $data['stock'],
+            $data['categoria'],
+            $data['id_cocinero']
         ]);
         return (int)$this->db->lastInsertId();
     }
 
     public function update(int $id, array $data): bool {
-        $st = $this->db->prepare("UPDATE plato SET nombre=?, descripcion=?, precio=?, categoria=?, id_cocinero=?
-                                  WHERE id_plato=?");
+        $st = $this->db->prepare("UPDATE plato 
+                                SET nombre=?, precio=?, stock=?, categoria=?, id_cocinero=? 
+                                WHERE id_plato=?");
         return $st->execute([
-            $data['nombre'], $data['descripcion'], $data['precio'],
-            $data['categoria'], $data['id_cocinero'], $id
+            $data['nombre'],
+            $data['precio'],
+            $data['stock'],
+            $data['categoria'],
+            $data['id_cocinero'],
+            $id
         ]);
     }
+
 
     public function delete(int $id): bool {
         $st = $this->db->prepare("DELETE FROM plato WHERE id_plato = ?");

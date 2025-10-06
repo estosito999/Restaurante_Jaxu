@@ -50,12 +50,13 @@ class PlatoController extends Controller {
 
         $plato = new Plato($this->db);
         $data = [
-            'nombre'      => trim($_POST['nombre'] ?? ''),
-            'descripcion' => trim($_POST['descripcion'] ?? ''),
-            'precio'      => (float)($_POST['precio'] ?? 0),
-            'categoria'   => trim($_POST['categoria'] ?? ''),
-            'id_cocinero' => (int)($_POST['id_cocinero'] ?? 0) ?: null,
+            'nombre' => trim($_POST['nombre'] ?? ''),
+            'precio' => (float)($_POST['precio'] ?? 0),
+            'stock' => (int)($_POST['stock'] ?? 0),
+            'categoria' => trim($_POST['categoria'] ?? 'Almuerzo'),
+            'id_cocinero' => (int)($_POST['id_cocinero'] ?? 1),
         ];
+
 
         // Validaciones
         if ($data['nombre'] === '' || $data['precio'] < 0) {
@@ -103,12 +104,13 @@ class PlatoController extends Controller {
 
         $model = new Plato($this->db);
         $data = [
-            'nombre'      => trim($_POST['nombre'] ?? ''),
-            'descripcion' => trim($_POST['descripcion'] ?? ''),
-            'precio'      => (float)($_POST['precio'] ?? 0),
-            'categoria'   => trim($_POST['categoria'] ?? ''),
-            'id_cocinero' => (int)($_POST['id_cocinero'] ?? 0) ?: null,
+            'nombre' => trim($_POST['nombre'] ?? ''),
+            'precio' => (float)($_POST['precio'] ?? 0),
+            'stock' => (int)($_POST['stock'] ?? 0),
+            'categoria' => trim($_POST['categoria'] ?? 'Almuerzo'),
+            'id_cocinero' => (int)($_POST['id_cocinero'] ?? 1),
         ];
+
         if ($data['nombre'] === '' || $data['precio'] < 0) {
             Session::flash('msg','Nombre obligatorio y precio ≥ 0.');
             return $this->redirect('/platos/editar/' . (int)$id);
