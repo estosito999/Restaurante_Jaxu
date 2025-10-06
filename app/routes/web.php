@@ -7,6 +7,24 @@ use App\Controllers\CajaController;
 use App\Controllers\EmpleadoController;
 use App\Controllers\VentasController;
 
+// Evita ejecución directa del archivo de rutas
+if (!isset($router) || !($router instanceof \Core\Router)) {
+    http_response_code(403);
+    header('Content-Type: text/html; charset=UTF-8');
+    echo <<<HTML
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Acceso no permitido</title></head>
+<body style="font-family: system-ui; padding:2rem;">
+  <h1>Acceso no permitido</h1>
+  <p>No deberías estar aquí. Este archivo se carga desde <code>public/index.php</code>.</p>
+</body>
+</html>
+HTML;
+    exit;
+}
+
+
 /** AUTH **/
 $router->add('GET','/',                 [AuthController::class,   'loginForm']);
 $router->add('POST','/login',           [AuthController::class,   'login']);
