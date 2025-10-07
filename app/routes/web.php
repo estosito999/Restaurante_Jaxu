@@ -6,6 +6,8 @@ use App\Controllers\FacturaController;
 use App\Controllers\CajaController;
 use App\Controllers\EmpleadoController;
 use App\Controllers\VentasController;
+use App\Controllers\RegistroVentaController;
+use App\Controllers\DetalleVentaController;
 
 // Evita ejecución directa del archivo de rutas
 if (!isset($router) || !($router instanceof \Core\Router)) {
@@ -72,6 +74,11 @@ $router->add('GET','/ventas/dia',        [VentasController::class, 'porDia']);
 $router->add('GET','/ventas/mes',        [VentasController::class, 'porMes']);
 $router->add('GET','/ventas/empleado',   [VentasController::class, 'porEmpleado']);
 $router->add('GET','/ventas/csv',        [VentasController::class, 'csv']);
+
+/** WEBI WABO */
+$router->add('GET', '/ventas', [RegistroVentaController::class, 'index']);
+$router->add('POST', '/ventas', [RegistroVentaController::class, 'create']);
+$router->add('GET', '/detalle_venta/{id}', [DetalleVentaController::class, 'show']);
 
 // Ruta de diagnóstico (opcional, para debug)
 $router->add('GET','/diag', function() {

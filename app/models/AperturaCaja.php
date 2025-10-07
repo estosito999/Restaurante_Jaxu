@@ -2,13 +2,17 @@
 namespace App\Models;
 
 class AperturaCaja extends BaseModel {
-    public function abrir(int $idEmpleado, string $fechaHora, float $saldoInicial): int {
-        // Cierra cualquier apertura huérfana (seguridad, opcional)
-        $this->db->prepare("UPDATE apertura_caja SET estado='cerrada' WHERE estado='abierta'")->execute();
 
-        $st = $this->db->prepare("INSERT INTO apertura_caja (fecha_hora_apertura, saldo_inicial, id_empleado, estado)
-                                  VALUES (?,?,?,'abierta')");
-        $st->execute([$fechaHora, $saldoInicial, $idEmpleado]);
+    public function abrir(int $idEmpleado, string $fechaHora, float $saldoInicial, string $detalleGastos): int {
+        // Cierra cualquier apertura huérfana (seguridad, opcional)
+        $this->db->prepare("UPDATE apertura_caja SET estado='cerrada', fecha_hora_cierre = NOW() WHERE estado='abierta'")->execute();
+
+        // Inserta la nueva apertura de caja con los gastos detallados en texto
+        $st = $this->db->prepare("INSERT INTO apertura_caja (fecha_hora_apertura, saldo_inicial, detalle_gastos, id_empleado, estado)
+                                  VALUES (?,?,?,?, 'abierta')");
+        $st->execute([$fechaHora, $saldoInicial, $detalleGastos, $idEmpleado]);
+        
+        // Retorna el ID de la nueva apertura
         return (int)$this->db->lastInsertId();
     }
 
@@ -19,7 +23,8 @@ class AperturaCaja extends BaseModel {
     }
 
     public function cerrar(int $idApertura): bool {
-        $st = $this->db->prepare("UPDATE apertura_caja SET estado='cerrada' WHERE id_apertura=?");
+        // Actualiza el estado de la apertura a cerrada
+        $st = $this->db->prepare("UPDATE apertura_caja SET estado='cerrada', fecha_hora_cierre = NOW() WHERE id_apertura=?");
         return $st->execute([$idApertura]);
     }
 }

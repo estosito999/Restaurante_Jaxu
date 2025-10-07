@@ -8,35 +8,37 @@ class Factura extends BaseModel {
         // $items: [ ['id_plato'=>int, 'cantidad'=>int, 'precio_unitario'=>float], ... ]
         $this->db->beginTransaction();
         try {
-            // Subtotal
+            // Calcular subtotal (suma de cantidad * precio_unitario)
             $subtotal = 0.0;
             foreach ($items as $it) {
                 $subtotal += ((float)$it['precio_unitario']) * ((int)$it['cantidad']);
             }
-            $iva = round($subtotal * $ivaRate, 2);
-            $total = round($subtotal + $iva, 2);
 
-            // Inserta factura
+            // Calcular IVA y monto total
+            $iva = round($subtotal * $ivaRate, 2);
+            $montoTotal = round($subtotal + $iva, 2);
+
+            // Insertar factura solo con el monto total
             $st = $this->db->prepare("
-                INSERT INTO factura (fecha_hora, subtotal, iva, total, monto_total, id_cliente, id_empleado)
-                VALUES (?,?,?,?,?,?,?)
+                INSERT INTO factura (fecha_hora, monto_total, id_cliente, id_empleado)
+                VALUES (?,?,?,?)
             ");
-            $st->execute([$fechaHora, $subtotal, $iva, $total, $total, $idCliente, $idEmpleado]);
+            $st->execute([$fechaHora, $montoTotal, $idCliente, $idEmpleado]);
             $idFactura = (int)$this->db->lastInsertId();
 
-            // Inserta detalles
+            // Insertar detalles de la factura
             $insDet = $this->db->prepare("
                 INSERT INTO detalle_venta (id_factura, id_plato, cantidad, precio_unitario, subtotal)
                 VALUES (?,?,?,?,?)
             ");
             foreach ($items as $it) {
-                $line = ((float)$it['precio_unitario']) * ((int)$it['cantidad']);
+                $line = ((float)$it['precio_unitario']) * ((int)$it['cantidad']); // Calcular subtotal por detalle
                 $insDet->execute([$idFactura, (int)$it['id_plato'], (int)$it['cantidad'], (float)$it['precio_unitario'], $line]);
             }
 
             // Registro de venta (pendiente de cierre)
             $insReg = $this->db->prepare("INSERT INTO registro_venta (id_factura, id_cierre, monto_venta) VALUES (?, NULL, ?)");
-            $insReg->execute([$idFactura, $total]);
+            $insReg->execute([$idFactura, $montoTotal]);
 
             $this->db->commit();
             return $idFactura;
@@ -61,6 +63,7 @@ class Factura extends BaseModel {
         $factura = $st->fetch();
         if (!$factura) return null;
 
+        // Obtener detalles de la factura
         $det = $this->db->prepare("
             SELECT d.*, p.nombre AS plato_nombre
             FROM detalle_venta d
@@ -73,10 +76,11 @@ class Factura extends BaseModel {
         return $factura;
     }
 
+    /** Cancela una factura */
     public function cancelFactura(int $idFactura, int $idEmpleado, ?string $motivo = null): bool {
         $this->db->beginTransaction();
         try {
-            // 1) Verificar estado actual y si ya fue cerrada
+            // Verificar estado de la factura y si ya fue cerrada
             $st = $this->db->prepare("
                 SELECT f.estado,
                     (SELECT rv.id_cierre FROM registro_venta rv WHERE rv.id_factura = f.id_factura LIMIT 1) AS id_cierre
@@ -90,11 +94,11 @@ class Factura extends BaseModel {
             if ($row['estado'] === 'anulada') throw new \RuntimeException('La factura ya está anulada');
             if (!empty($row['id_cierre'])) throw new \RuntimeException('No se puede anular: la factura ya fue incluida en un cierre de caja');
 
-            // 2) Borrar registro_venta pendiente (si existe)
+            // Borrar el registro de venta pendiente (si existe)
             $del = $this->db->prepare("DELETE FROM registro_venta WHERE id_factura = ?");
             $del->execute([$idFactura]);
 
-            // 3) Marcar factura como anulada con trazabilidad
+            // Marcar la factura como anulada con trazabilidad
             $up = $this->db->prepare("
                 UPDATE factura
                 SET estado='anulada', anulada_por=?, anulada_motivo=?, anulada_at=?
@@ -109,5 +113,5 @@ class Factura extends BaseModel {
             throw $e;
         }
     }
-
 }
+
