@@ -1,48 +1,91 @@
-<?php // app/Core/Session.php
+<?php
 namespace Core;
 
-class Session {
-    protected static function start(): void {
+class Session
+{
+    private static bool $booted = false;
+
+    private static function boot(): void
+    {
+        if (self::$booted) return;
         if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
+            @session_start();
         }
-    }
-
-    // Genera y devuelve token CSRF
-    public static function getCsrf(): string {
-        self::start();
-        if (empty($_SESSION['_csrf'])) {
-            // más seguro que hash(session_id())
-            $_SESSION['_csrf'] = bin2hex(random_bytes(32));
+        if (!isset($_SESSION['__flash'])) {
+            $_SESSION['__flash'] = [];
         }
-        return $_SESSION['_csrf'];
-    }
-
-    // Valida token recibido
-    public static function checkCsrf(?string $token): bool {
-        self::start();
-        return is_string($token) && hash_equals($_SESSION['_csrf'] ?? '', $token);
-    }
-
-    // Flash: set/get con el mismo namespace
-    public static function flash(string $key, ?string $value = null) {
-        self::start();
-        if ($value === null) {
-            $val = $_SESSION['_flash'][$key] ?? null;
-            if (isset($_SESSION['_flash'][$key])) {
-                unset($_SESSION['_flash'][$key]); // se consume una vez
-            }
-            return $val;
+        if (empty($_SESSION['__csrf'])) {
+            $_SESSION['__csrf'] = bin2hex(random_bytes(16));
         }
-        $_SESSION['_flash'][$key] = $value;
-        return null;
+        self::$booted = true;
     }
 
-    // Helper para obtener un flash “por defecto” (opcional)
-    public static function getFlash() {
-        self::start();
-        $flash = $_SESSION['_flash']['default'] ?? null;
-        unset($_SESSION['_flash']['default']);
-        return $flash;
+    public static function get(string $key, $default = null)
+    {
+        self::boot();
+        return array_key_exists($key, $_SESSION) ? $_SESSION[$key] : $default;
+    }
+
+    public static function set(string $key, $value): void
+    {
+        self::boot();
+        $_SESSION[$key] = $value;
+    }
+
+    public static function forget(string $key): void
+    {
+        self::boot();
+        unset($_SESSION[$key]);
+    }
+
+    // Flash simple (mensaje de una sola lectura)
+    public static function flash(string $key, string $value): void
+    {
+        self::boot();
+        $_SESSION['__flash'][$key] = $value;
+    }
+
+    public static function getFlash(string $key): ?string
+    {
+        self::boot();
+        if (!isset($_SESSION['__flash'][$key])) return null;
+        $v = (string) $_SESSION['__flash'][$key];
+        unset($_SESSION['__flash'][$key]);
+        return $v;
+    }
+
+    // CSRF
+    public static function getCsrf(): string
+    {
+        self::boot();
+        return (string) $_SESSION['__csrf'];
+    }
+
+    public static function verifyCsrf(?string $token): bool
+    {
+        self::boot();
+        return is_string($token) && hash_equals($_SESSION['__csrf'], $token);
+    }
+
+    public static function regenerateCsrf(): void
+    {
+        self::boot();
+        $_SESSION['__csrf'] = bin2hex(random_bytes(16));
+    }
+
+    public static function destroy(): void
+    {
+        self::boot();
+        $_SESSION = [];
+        if (ini_get('session.use_cookies')) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000,
+                $params['path'], $params['domain'],
+                isset($params['secure']) ? (bool)$params['secure'] : false,
+                isset($params['httponly']) ? (bool)$params['httponly'] : true
+            );
+        }
+        @session_destroy();
+        self::$booted = false;
     }
 }

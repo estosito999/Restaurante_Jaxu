@@ -1,101 +1,52 @@
 <?php
 namespace App\Models;
 
-class Empleado extends BaseModel {
+class Empleado extends BaseModel
+{
+    protected $table = 'empleado';
+    protected $primaryKey = 'id_empleado';
+    protected $fillable = ['nombre','apellido','ci','puesto','sueldo','password_hash','rol'];
 
-    /** Lista todos los empleados */
-    public function all(): array {
-        $st = $this->db->query("SELECT id_empleado,nombre,apellido,ci,puesto,rol FROM empleado ORDER BY rol DESC, nombre, apellido");
-        return $st->fetchAll();
+    public function listar() {
+        $sql = "SELECT id_empleado,nombre,apellido,ci,puesto,sueldo,rol
+                FROM {$this->table}
+                ORDER BY rol DESC, nombre, apellido";
+        return $this->db->query($sql)->fetchAll();
     }
 
-    /** Busca por id */
-    public function find(int $id): ?array {
-        $st = $this->db->prepare("SELECT id_empleado,nombre,apellido,ci,puesto,rol FROM empleado WHERE id_empleado=?");
-        $st->execute([$id]);
-        $row = $st->fetch();
-        return $row ?: null;
+    public function findByCI($ci) {
+        $st = $this->db->prepare("SELECT * FROM {$this->table} WHERE ci=:ci LIMIT 1");
+        $st->execute([':ci'=>$ci]);
+        return $st->fetch() ?: null;
     }
 
-    /** Crea empleado (hash de password si se provee) */
-    public function create(array $data): int {
-        // siempre genera hash al crear
-        $hash = password_hash($data['password'], PASSWORD_BCRYPT);
-
-        $st = $this->db->prepare("INSERT INTO empleado (nombre, apellido, ci, puesto, sueldo, password_hash, rol)
-                                VALUES (?,?,?,?,?,?,?)");
-        $st->execute([
-            $data['nombre'],
-            $data['apellido'],
-            $data['ci'],
-            $data['puesto'],
-            $data['sueldo'],
-            $hash,
-            $data['rol']
-        ]);
-        return (int)$this->db->lastInsertId();
+    public function ciExists($ci) {
+        $st = $this->db->prepare("SELECT 1 FROM {$this->table} WHERE ci=:ci LIMIT 1");
+        $st->execute([':ci'=>$ci]);
+        return (bool)$st->fetchColumn();
     }
 
+    public function setPassword($id, $plain) {
+        $hash = password_hash($plain, PASSWORD_DEFAULT);
+        return $this->updateById($id, ['password_hash'=>$hash]);
+    }
 
-    /** Actualiza datos (sin password) */
-    public function update(int $id, array $data): bool {
-        // si viene password, lo actualizamos, si no, se deja el hash actual
-        if (!empty($data['password'])) {
-            $hash = password_hash($data['password'], PASSWORD_BCRYPT);
-            $sql = "UPDATE empleado 
-                    SET nombre=?, apellido=?, ci=?, puesto=?, sueldo=?, rol=?, password_hash=? 
-                    WHERE id_empleado=?";
-            $st = $this->db->prepare($sql);
-            return $st->execute([
-                $data['nombre'],
-                $data['apellido'],
-                $data['ci'],
-                $data['puesto'],
-                $data['sueldo'],
-                $data['rol'],
-                $hash,
-                $id
-            ]);
-        } else {
-            $sql = "UPDATE empleado 
-                    SET nombre=?, apellido=?, ci=?, puesto=?, sueldo=?, rol=? 
-                    WHERE id_empleado=?";
-            $st = $this->db->prepare($sql);
-            return $st->execute([
-                $data['nombre'],
-                $data['apellido'],
-                $data['ci'],
-                $data['puesto'],
-                $data['sueldo'],
-                $data['rol'],
-                $id
-            ]);
+    public function verifyLogin($ci, $plain) {
+        $u = $this->findByCI($ci);
+        if (!$u) return null;
+        if (!empty($u['password_hash']) && password_verify($plain, $u['password_hash'])) {
+            return $u;
         }
+        return null;
     }
 
-
-    /** Cambia contraseña */
-    public function updatePassword(int $id, string $password): bool {
-        $sql = "UPDATE empleado SET password_hash=? WHERE id_empleado=?";
-        $st = $this->db->prepare($sql);
-        return $st->execute([ password_hash($password, PASSWORD_BCRYPT), $id ]);
+    public function countAdmins() {
+        $st = $this->db->query("SELECT COUNT(*) FROM {$this->table} WHERE rol='admin'");
+        return (int)$st->fetchColumn();
     }
 
-    /** Borra empleado */
-    public function delete(int $id): bool {
-        $st = $this->db->prepare("DELETE FROM empleado WHERE id_empleado=?");
-        return $st->execute([$id]);
-    }
-
-    /** Cuenta admins existentes */
-    public function countAdmins(): int {
-        $st = $this->db->query("SELECT COUNT(*) AS c FROM empleado WHERE rol='admin'");
-        return (int)($st->fetch()['c'] ?? 0);
-    }
-
-    /** ¿Este id es admin? */
-    public function isAdmin(int $id): bool {
-        $st = $this->db->prepare("SELECT 1 FROM empleado WHERE id_empleado=? AND rol='admin' LIMIT 1");
+    public function isAdmin($id) {
+        $st = $this->db->prepare("SELECT 1 FROM {$this->table} WHERE {$this->primaryKey}=? AND rol='admin' LIMIT 1");
         $st->execute([$id]);
         return (bool)$st->fetch();
     }

@@ -1,9 +1,15 @@
-# /public/.htaccess
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-  # URLs limpias hacia public/index.php
-  RewriteCond %{REQUEST_FILENAME} !-f
-  RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule ^ index.php [QSA,L]
-</IfModule>
+Options -Indexes
 
+RewriteEngine On
+RewriteBase /Restaurant_Jaxu/public/
+
+# Sirve archivos reales y carpetas tal cual
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Todo lo demás → index.php
+RewriteRule ^ index.php [QSA,L]
+
+# Página por defecto
+DirectoryIndex index.php

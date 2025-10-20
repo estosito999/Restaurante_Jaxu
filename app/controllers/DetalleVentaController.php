@@ -2,24 +2,22 @@
 namespace App\Controllers;
 
 use Core\Controller;
-use App\Models\DetalleVenta;
+use Core\Auth;
+use Core\Database;
 
-class DetalleVentaController extends Controller {
-
-    protected $db;
+class DetalleVentaController extends Controller
+{
+    private \PDO $db;
 
     public function __construct()
     {
-        parent::__construct();
-        // Replace with your actual DB connection logic
-        $this->db = (new \Core\Database())->getPdo(); // Ensure this returns a PDO instance
+        $this->db = Database::pdo();
+        Auth::requireLogin();
     }
 
-    // Obtener detalles de una venta
-    public function show($id) {
-        $detalleVenta = new DetalleVenta($this->db);
-        $detalles = $detalleVenta->getByFactura($id);
-        
-        $this->view('detalle_venta/show', ['detalles' => $detalles]);
+    public function show($id)
+    {
+        // Muestra items de la factura/venta $id
+        return $this->view('detalle_venta/show', ['id'=>(int)$id]);
     }
 }

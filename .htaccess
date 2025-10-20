@@ -1,9 +1,0 @@
-# /Restaurant_Jaxu/.htaccess
-
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-
-  # 1) Si no es /public, redirige todo a /public manteniendo la ruta
-  RewriteCond %{REQUEST_URI} !^/public/ [NC]
-  RewriteRule ^(.*)$ public/$1 [L,QSA]
-</IfModule>

@@ -3,42 +3,47 @@ namespace App\Controllers;
 
 use Core\Controller;
 use Core\Session;
-use Core\Auth;
+use Core\Database;
 
-class AuthController extends Controller {
-    private \PDO $db;
-    public function __construct() { global $pdo; $this->db = $pdo; }
-
+class AuthController extends Controller
+{
     public function loginForm() {
-        if (Auth::check()) { $this->redirect('/platos'); }
-        $this->view('auth/login', ['csrf' => \Core\Session::getCsrf(), 'flash' => Session::flash('msg')]);
+        // Renderiza views/auth/login.php
+        return $this->view('auth/login', [
+            'flash' => Session::flash('msg', 'null')
+        ]);
     }
 
     public function login() {
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
-
-        $ci = trim($_POST['ci'] ?? '');
-        $password = $_POST['password'] ?? '';
-
-        $st = $this->db->prepare("SELECT id_empleado, password_hash, rol FROM empleado WHERE ci = ?");
-        $st->execute([$ci]);
-        $user = $st->fetch();
-
-        if ($user && password_verify($password, $user['password_hash'])) {
-            $_SESSION['user_id'] = (int)$user['id_empleado'];
-            $_SESSION['rol']     = $user['rol'];
-            Session::flash('msg', '¡Bienvenido!');
-            $this->redirect('/platos'); // o dashboard
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) {
+            Session::flash('msg','Sesión inválida. Recarga la página.');
+            return $this->redirect('/login');
         }
+        $ci   = preg_replace('/\D+/', '', $_POST['ci'] ?? '');
+        $pass = $_POST['password'] ?? '';
 
-        Session::flash('msg','CI o contraseña inválidos');
-        $this->redirect('/login');
+        $db = Database::getInstance();
+        $st = $db->prepare("SELECT id_empleado, nombre, rol, password_hash FROM empleado WHERE ci=:ci LIMIT 1");
+        $st->execute([':ci'=>$ci]);
+        $u = $st->fetch();
+
+        // Si tu usuario demo no tiene hash bcrypt, permite modo “dev”:
+        $ok = $u && (
+            (!empty($u['password_hash']) && password_verify($pass, $u['password_hash']))
+            || ($u['password_hash'] === $pass) // ⚠️ quita esto en producción
+        );
+
+        if ($ok) {
+            Session::set('user_id', (int)$u['id_empleado']);
+            Session::set('rol', $u['rol']);
+            return $this->redirect('/platos');
+        }
+        Session::flash('msg','Credenciales inválidas');
+        return $this->redirect('/login');
     }
 
     public function logout() {
-        session_destroy();
-        session_start();
-        Session::flash('msg','Sesión cerrada');
-        $this->redirect('/login');
+        Session::destroy();
+        return $this->redirect('/login');
     }
 }

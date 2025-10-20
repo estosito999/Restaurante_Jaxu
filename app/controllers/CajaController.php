@@ -2,77 +2,84 @@
 namespace App\Controllers;
 
 use Core\Controller;
-use Core\Auth;
 use Core\Session;
-use App\Models\CierreCaja;
-use App\Models\AperturaCaja;
+use Core\Database;
 
-class CajaController extends Controller {
-    private \PDO $db;
-    public function __construct() { global $pdo; $this->db = $pdo; Auth::requireLogin(); }
+class CajaController extends Controller
+{
+    public function abrirForm() {
+        return $this->view('caja/abrir', ['flash'=>Session::flash('msg')]);
+    }
+
+    public function abrir() {
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/caja/abrir');
+        $db = Database::getInstance();
+
+        // Cerrar cualquier apertura “zombie”
+        $db->exec("UPDATE apertura_caja SET estado='cerrada' WHERE estado='abierta'");
+
+        $st = $db->prepare("INSERT INTO apertura_caja (fecha_hora_apertura, saldo_inicial, detalle_gastos, id_empleado, estado)
+                            VALUES (:fh,:si,:dg,:emp,'abierta')");
+        $ok = $st->execute([
+            ':fh'=>date('Y-m-d H:i:s'),
+            ':si'=>(float)($_POST['saldo_inicial'] ?? 0),
+            ':dg'=>trim($_POST['detalle_gastos'] ?? ''),
+            ':emp'=>(int)Session::get('user_id'),
+        ]);
+        Session::flash('msg', $ok ? 'Caja abierta' : 'No se pudo abrir la caja');
+        return $this->redirect('/caja/cierre');
+    }
 
     public function index() {
-        Auth::requireRole(['admin','cajero']);
-        $cierre = new CierreCaja($this->db);
-        $ap     = new AperturaCaja($this->db);
-
-        $pend    = $cierre->ventasPendientes();
-        $totalPend = $cierre->totalPendiente();   // ← nuevo
-        $cierres = $cierre->listarCierres();
-        $abierta = $ap->actualAbierta();
-
-        $this->view('caja/index', [
-            'cierres' => $cierres,
-            'pendientes' => $pend,
-            'totalPend' => $totalPend,            // ← pásalo a la vista
-            'abierta' => $abierta,
-            'csrf' => \Core\Session::getCsrf()
-        ]);
+        $db = Database::getInstance();
+        $abierta = $db->query("SELECT * FROM apertura_caja WHERE estado='abierta' ORDER BY id_apertura DESC LIMIT 1")->fetch();
+        $cierres = $db->query("SELECT c.*, e.nombre AS empleado
+                               FROM cierre_caja c
+                               LEFT JOIN empleado e ON e.id_empleado=c.id_empleado
+                               ORDER BY c.id_cierre DESC LIMIT 50")->fetchAll();
+        return $this->view('caja/index', ['abierta'=>$abierta, 'cierres'=>$cierres, 'flash'=>Session::flash('msg')]);
     }
 
     public function cerrar() {
-        Auth::requireRole(['admin','cajero']);
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/caja/cierre');
 
-        $efectivo = (float)($_POST['monto_efectivo_contado'] ?? 0);
-
-        $cierre = new CierreCaja($this->db);
-        try {
-            // valida que haya ventas
-            if ($cierre->totalPendiente() <= 0) {
-                \Core\Session::flash('msg', 'No hay ventas pendientes para cerrar.');
-                return $this->redirect('/caja/cierre');
-            }
-            $idCierre = $cierre->cerrarCaja(\Core\Auth::userId(), date('Y-m-d H:i:s'), $efectivo);
-
-            // Cierra apertura si la manejas (opcional, tu código ya lo hace)
-            $ap = new AperturaCaja($this->db);
-            if ($curr = $ap->actualAbierta()) { $ap->cerrar((int)$curr['id_apertura']); }
-
-            \Core\Session::flash('msg', 'Cierre realizado #' . $idCierre);
-        } catch (\Throwable $e) {
-            \Core\Session::flash('msg', 'No se pudo cerrar: ' . $e->getMessage());
+        $db = Database::getInstance();
+        $ap = $db->query("SELECT * FROM apertura_caja WHERE estado='abierta' ORDER BY id_apertura DESC LIMIT 1")->fetch();
+        if (!$ap) {
+            Session::flash('msg','No hay caja abierta');
+            return $this->redirect('/caja/cierre');
         }
-        $this->redirect('/caja/cierre');
+
+        // Total de ventas desde esa apertura
+        $st = $db->prepare("SELECT SUM(monto_venta) FROM registro_venta WHERE id_apertura=:a");
+        $st->execute([':a'=>$ap['id_apertura']]);
+        $totalVentas = (float)$st->fetchColumn();
+
+        $contado = (float)($_POST['monto_efectivo_contado'] ?? 0);
+        $dif     = $contado - $totalVentas;
+
+        $db->beginTransaction();
+        try {
+            // Inserta cierre
+            $ins = $db->prepare("INSERT INTO cierre_caja (fecha_hora_cierre, monto_total_ventas, monto_efectivo_contado, diferencia, id_empleado)
+                                 VALUES (:fh,:tv,:me,:df,:emp)");
+            $ins->execute([
+                ':fh'=>date('Y-m-d H:i:s'),
+                ':tv'=>$totalVentas,
+                ':me'=>$contado,
+                ':df'=>$dif,
+                ':emp'=>(int)Session::get('user_id')
+            ]);
+            // Marca apertura cerrada
+            $db->prepare("UPDATE apertura_caja SET estado='cerrada' WHERE id_apertura=:id")
+               ->execute([':id'=>$ap['id_apertura']]);
+
+            $db->commit();
+            Session::flash('msg','Caja cerrada');
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            Session::flash('msg','No se pudo cerrar: '.$e->getMessage());
+        }
+        return $this->redirect('/caja/cierre');
     }
-
-
-    /** GET /caja/abrir (form) */
-    public function abrirForm() {
-        Auth::requireRole(['admin','cajero']);
-        $this->view('caja/abrir', ['csrf' => \Core\Session::getCsrf()]);
-    }
-
-    /** POST /caja/abrir */
-    public function abrir() {
-        Auth::requireRole(['admin','cajero']);
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
-        $saldo = (float)($_POST['saldo_inicial'] ?? 0);
-        $ap = new AperturaCaja($this->db);
-        $idAp = $ap->abrir(Auth::userId(), date('Y-m-d H:i:s'), $saldo);
-        Session::flash('msg', 'Caja abierta (#'.$idAp.')');
-        $this->redirect('/caja/cierre');
-    }
-
-    
 }

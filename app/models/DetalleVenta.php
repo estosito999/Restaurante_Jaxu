@@ -1,36 +1,36 @@
 <?php
 namespace App\Models;
 
-class DetalleVenta extends BaseModel {
+class DetalleVenta extends BaseModel
+{
+    protected $table = 'detalle_venta';
+    protected $primaryKey = 'id_detalle';
+    protected $fillable = ['id_factura','id_plato','cantidad','precio','subtotal'];
 
-    // Crear detalle de venta
-    public function create(array $data): int {
-        $st = $this->db->prepare("INSERT INTO detalle_venta(id_factura, id_plato, cantidad, precio_unitario, subtotal)
-                                  VALUES(?,?,?,?,?)");
-        $st->execute([
-            $data['id_factura'],
-            $data['id_plato'],
-            $data['cantidad'],
-            $data['precio_unitario'],
-            $data['subtotal']
+    public function agregarItem($idFactura, $idPlato, $cantidad, $precioUnit) {
+        $subtotal = $cantidad * $precioUnit;
+        return $this->insert([
+            'id_factura' => $idFactura,
+            'id_plato'   => $idPlato,
+            'cantidad'   => (int)$cantidad,
+            'precio'     => (float)$precioUnit,
+            'subtotal'   => (float)$subtotal,
         ]);
-        return (int)$this->db->lastInsertId();
     }
 
-    // Obtener detalles de venta por ID
-    public function find(int $id): ?array {
-        $st = $this->db->prepare("SELECT * FROM detalle_venta WHERE id_detalle = ?");
-        $st->execute([$id]);
-        return $st->fetch() ?: null;
-    }
-
-    // Listar todos los detalles de una factura
-    public function getByFactura(int $idFactura): array {
-        $st = $this->db->prepare("SELECT dv.*, p.nombre AS plato_nombre
-                                  FROM detalle_venta dv
-                                  LEFT JOIN plato_bebidas p ON p.id_plato = dv.id_plato
-                                  WHERE dv.id_factura = ?");
-        $st->execute([$idFactura]);
+    public function listarPorFactura($idFactura) {
+        $st = $this->db->prepare("SELECT d.*, p.nombre AS plato
+                                  FROM detalle_venta d
+                                  LEFT JOIN plato_bebidas p ON p.id_plato = d.id_plato
+                                  WHERE d.id_factura = :id
+                                  ORDER BY d.id_detalle ASC");
+        $st->execute([':id'=>$idFactura]);
         return $st->fetchAll();
+    }
+
+    public function totalPorFactura($idFactura) {
+        $st = $this->db->prepare("SELECT SUM(subtotal) FROM detalle_venta WHERE id_factura=:id");
+        $st->execute([':id'=>$idFactura]);
+        return (float)$st->fetchColumn();
     }
 }

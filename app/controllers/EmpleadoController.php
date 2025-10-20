@@ -2,179 +2,109 @@
 namespace App\Controllers;
 
 use Core\Controller;
-use Core\Auth;
 use Core\Session;
-use App\Models\Empleado;
+use Core\Database;
 
-class EmpleadoController extends Controller {
-    private \PDO $db;
-    public function __construct() {
-        global $pdo; $this->db = $pdo;
-        Auth::requireLogin();
-        Auth::requireRole(['admin']); // Solo admin gestiona empleados
-    }
-
-    // GET /empleados
+class EmpleadoController extends Controller
+{
     public function index() {
-        $model = new Empleado($this->db);
-        $this->view('empleados/index', [
-            'empleados' => $model->all(),
-            'csrf' => \Core\Session::getCsrf(),
-            'flash' => Session::flash('msg')
-        ]);
+        $db = Database::getInstance();
+        $rows = $db->query("SELECT id_empleado,nombre,apellido,ci,puesto,sueldo,rol FROM empleado ORDER BY rol DESC,nombre")->fetchAll();
+        return $this->view('empleados/index', ['rows'=>$rows, 'flash'=>Session::flash('msg')]);
     }
 
-    // GET /empleados/crear
     public function create() {
-        $this->view('empleados/create', [
-            'csrf' => \Core\Session::getCsrf()
-        ]);
+        return $this->view('empleados/create');
     }
 
-    // POST /empleados
     public function store() {
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/empleados/crear');
 
-        $data = [
-            'nombre'   => trim($_POST['nombre']   ?? ''),
+        $d = [
+            'nombre'   => trim($_POST['nombre'] ?? ''),
             'apellido' => trim($_POST['apellido'] ?? ''),
-            'ci'       => trim($_POST['ci']       ?? ''),
-            'puesto'   => trim($_POST['puesto']   ?? ''),
-            'rol'      => trim($_POST['rol']      ?? 'mesero'),
-            'password' => (string)($_POST['password'] ?? ''),
+            'ci'       => preg_replace('/\D+/', '', $_POST['ci'] ?? ''),
+            'puesto'   => trim($_POST['puesto'] ?? 'Gerente'),
+            'sueldo'   => (float)($_POST['sueldo'] ?? 0),
+            'rol'      => $_POST['rol'] ?? 'cajero',
         ];
-
-        if ($data['nombre']==='' || $data['ci']==='') {
-            Session::flash('msg','Nombre y CI son obligatorios.');
-            $this->redirect('/empleados/crear');
-        }
-        if (!in_array($data['rol'], ['admin','cajero','mesero'], true)) {
-            Session::flash('msg','Rol inválido.');
-            $this->redirect('/empleados/crear');
+        $pass = $_POST['password'] ?? '';
+        if ($pass !== ($_POST['password_confirm'] ?? '')) {
+            Session::flash('msg','Las contraseñas no coinciden');
+            return $this->redirect('/empleados/crear');
         }
 
-        try {
-            (new Empleado($this->db))->create($data);
-            Session::flash('msg','Empleado creado.');
-            $this->redirect('/empleados');
-        } catch (\PDOException $e) {
-            // CI UNIQUE
-            if ((int)$e->errorInfo[1] === 1062) {
-                Session::flash('msg','El CI ya está registrado.');
-                $this->redirect('/empleados/crear');
-            }
-            throw $e;
+        $db = Database::getInstance();
+        // CI único
+        $q = $db->prepare("SELECT 1 FROM empleado WHERE ci=:ci LIMIT 1");
+        $q->execute([':ci'=>$d['ci']]);
+        if ($q->fetchColumn()) {
+            Session::flash('msg','El CI ya existe');
+            return $this->redirect('/empleados/crear');
         }
+
+        $st = $db->prepare("INSERT INTO empleado (nombre,apellido,ci,puesto,sueldo,password_hash,rol)
+                            VALUES (:nombre,:apellido,:ci,:puesto,:sueldo,:hash,:rol)");
+        $ok = $st->execute([
+            ':nombre'=>$d['nombre'],':apellido'=>$d['apellido'],':ci'=>$d['ci'],
+            ':puesto'=>$d['puesto'],':sueldo'=>$d['sueldo'],
+            ':hash'=> password_hash($pass, PASSWORD_DEFAULT),
+            ':rol'=>$d['rol']
+        ]);
+        Session::flash('msg', $ok ? 'Empleado creado' : 'No se pudo crear');
+        return $this->redirect('/empleados');
     }
 
-    // GET /empleados/editar/{id}
     public function edit($id) {
-        $id = (int)$id;
-        $model = new Empleado($this->db);
-        $emp = $model->find($id);
-        if (!$emp) { http_response_code(404); exit('No encontrado'); }
-        $this->view('empleados/edit', [
-            'emp' => $emp,
-            'csrf' => \Core\Session::getCsrf()
-        ]);
+        $db = Database::getInstance();
+        $st = $db->prepare("SELECT * FROM empleado WHERE id_empleado=:id");
+        $st->execute([':id'=>$id]);
+        $emp = $st->fetch();
+        if (!$emp) return $this->redirect('/empleados');
+        return $this->view('empleados/edit', ['emp'=>$emp]);
     }
 
-    // POST /empleados/actualizar/{id}
     public function update($id) {
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
-        $id = (int)$id;
-        $model = new Empleado($this->db);
-        $emp = $model->find($id);
-        if (!$emp) { http_response_code(404); exit('No encontrado'); }
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/empleados/editar/'.$id);
 
-        $data = [
-            'nombre'   => trim($_POST['nombre']   ?? ''),
-            'apellido' => trim($_POST['apellido'] ?? ''),
-            'ci'       => trim($_POST['ci']       ?? ''),
-            'puesto'   => trim($_POST['puesto']   ?? ''),
-            'rol'      => trim($_POST['rol']      ?? $emp['rol']),
-        ];
-
-        if ($data['nombre']==='' || $data['ci']==='') {
-            Session::flash('msg','Nombre y CI son obligatorios.');
-            $this->redirect('/empleados/editar/'.$id);
-        }
-        if (!in_array($data['rol'], ['admin','cajero','mesero'], true)) {
-            Session::flash('msg','Rol inválido.');
-            $this->redirect('/empleados/editar/'.$id);
-        }
-
-        // Protección: no permitir dejar al sistema sin administradores
-        $isAdminOriginal = ($emp['rol'] === 'admin');
-        $isAdminNuevo = ($data['rol'] === 'admin');
-        if ($isAdminOriginal && !$isAdminNuevo) {
-            // Está intentando bajar a un admin
-            if ($model->countAdmins() <= 1) {
-                Session::flash('msg','No puedes quitar el rol admin: es el último administrador.');
-                $this->redirect('/empleados/editar/'.$id);
-            }
-        }
-
-        try {
-            $model->update($id, $data);
-            Session::flash('msg','Empleado actualizado.');
-            $this->redirect('/empleados');
-        } catch (\PDOException $e) {
-            if ((int)$e->errorInfo[1] === 1062) {
-                Session::flash('msg','El CI ya está registrado.');
-                $this->redirect('/empleados/editar/'.$id);
-            }
-            throw $e;
-        }
-    }
-
-    // POST /empleados/eliminar/{id}
-    public function destroy($id) {
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
-        $id = (int)$id;
-        $model = new Empleado($this->db);
-
-        // No se puede eliminar a sí mismo
-        if ($id === \Core\Auth::userId()) {
-            Session::flash('msg','No puedes eliminar tu propio usuario.');
-            $this->redirect('/empleados');
-        }
-        // No dejar sin administradores
-        if ($model->isAdmin($id) && $model->countAdmins() <= 1) {
-            Session::flash('msg','No puedes eliminar al último administrador.');
-            $this->redirect('/empleados');
-        }
-
-        $model->delete($id);
-        Session::flash('msg','Empleado eliminado.');
-        $this->redirect('/empleados');
-    }
-
-    // GET /empleados/password/{id}
-    public function passwordForm($id) {
-        $id = (int)$id;
-        $model = new Empleado($this->db);
-        $emp = $model->find($id);
-        if (!$emp) { http_response_code(404); exit('No encontrado'); }
-        $this->view('empleados/password', [
-            'emp' => $emp,
-            'csrf' => \Core\Session::getCsrf()
+        $db = Database::getInstance();
+        $st = $db->prepare("UPDATE empleado SET nombre=:nombre, apellido=:apellido, puesto=:puesto, sueldo=:sueldo, rol=:rol WHERE id_empleado=:id");
+        $ok = $st->execute([
+            ':nombre'=>trim($_POST['nombre'] ?? ''),
+            ':apellido'=>trim($_POST['apellido'] ?? ''),
+            ':puesto'=>trim($_POST['puesto'] ?? ''),
+            ':sueldo'=>(float)($_POST['sueldo'] ?? 0),
+            ':rol'=>$_POST['rol'] ?? 'cajero',
+            ':id'=>$id
         ]);
+        Session::flash('msg', $ok ? 'Empleado actualizado' : 'No se pudo actualizar');
+        return $this->redirect('/empleados');
     }
 
-    // POST /empleados/password/{id}
-    public function passwordUpdate($id) {
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
-        $id = (int)$id;
-        $pass = (string)($_POST['password'] ?? '');
-        $pass2 = (string)($_POST['password2'] ?? '');
+    public function passwordForm($id) {
+        return $this->view('empleados/password', ['id'=>$id]);
+    }
 
-        if ($pass === '' || $pass !== $pass2 || strlen($pass) < 6) {
-            Session::flash('msg','Contraseña inválida (mínimo 6) o no coincide.');
-            $this->redirect('/empleados/password/'.$id);
+    public function passwordUpdate($id) {
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/empleados/password/'.$id);
+        $p1 = $_POST['password'] ?? ''; $p2 = $_POST['password_confirm'] ?? '';
+        if ($p1 === '' || $p1 !== $p2) {
+            Session::flash('msg','Las contraseñas no coinciden');
+            return $this->redirect('/empleados/password/'.$id);
         }
-        (new Empleado($this->db))->updatePassword($id, $pass);
-        Session::flash('msg','Contraseña actualizada.');
-        $this->redirect('/empleados');
+        $db = Database::getInstance();
+        $st = $db->prepare("UPDATE empleado SET password_hash=:h WHERE id_empleado=:id");
+        $ok = $st->execute([':h'=>password_hash($p1,PASSWORD_DEFAULT), ':id'=>$id]);
+        Session::flash('msg', $ok ? 'Contraseña actualizada' : 'No se pudo actualizar');
+        return $this->redirect('/empleados');
+    }
+
+    public function destroy($id) {
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/empleados');
+        $db = Database::getInstance();
+        $st = $db->prepare("DELETE FROM empleado WHERE id_empleado=:id");
+        $ok = $st->execute([':id'=>$id]);
+        Session::flash('msg', $ok ? 'Empleado eliminado' : 'No se pudo eliminar');
+        return $this->redirect('/empleados');
     }
 }

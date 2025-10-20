@@ -2,65 +2,105 @@
 namespace App\Controllers;
 
 use Core\Controller;
-use App\Models\RegistroVenta;
-use App\Models\DetalleVenta;
+use Core\Auth;
+use Core\Session;
+use Core\Database;
 
-class RegistroVentaController extends Controller {
+class RegistroVentaController extends Controller
+{
+    /** @var \PDO */
+    private \PDO $db;
 
-    protected $db;
-
-    public function __construct($db)
+    public function __construct()
     {
-        $this->db = $db;
-        parent::__construct();
+        $this->db = Database::pdo();
+        Auth::requireLogin();
+        Auth::requireRole(['admin','cajero','mesero']); // quienes pueden registrar ventas
     }
 
-    public function create() {
-        $registroVenta = new RegistroVenta($this->db);
-        $detalleVenta = new DetalleVenta($this->db);
-        
-        // Suponiendo que tienes los datos de la venta en $data y los detalles en $detalles
-        $data = [
-            'id_factura' => 1,  // ID de la factura creada
-            'id_cierre' => null,  // Se asigna en el cierre de caja
-            'id_apertura' => 1,  // ID de la apertura de caja
-            'id_empleado' => 1,  // ID del empleado
-            'fecha_venta' => date('Y-m-d H:i:s'),
-            'monto_venta' => 100.00  // Suma de todos los detalles
-        ];
+    // GET /ventas/registro
+    public function index()
+    {
+        // combos básicos para la vista de registro
+        $platos   = $this->db->query("SELECT id, nombre, precio FROM plato WHERE estado=1 ORDER BY nombre")->fetchAll();
+        $clientes = $this->db->query("SELECT id, nombre FROM cliente ORDER BY nombre")->fetchAll();
 
-        // Crear el registro de venta
-        $registroVentaId = $registroVenta->create($data);
+        return $this->view('ventas/registro', [
+            'platos'   => $platos,
+            'clientes' => $clientes,
+            'csrf'     => Session::getCsrf(),
+            'flash'    => Session::getFlash('msg'),
+        ]);
+    }
 
-        // Crear los detalles de venta
-        $detalles = [
-            [
-                'id_factura' => 1,
-                'id_plato' => 1,
-                'cantidad' => 2,
-                'precio_unitario' => 25.00,
-                'subtotal' => 50.00
-            ],
-            [
-                'id_factura' => 1,
-                'id_plato' => 2,
-                'cantidad' => 1,
-                'precio_unitario' => 30.00,
-                'subtotal' => 30.00
-            ]
-        ];
-
-        foreach ($detalles as $detalle) {
-            $detalleVenta->create($detalle);
+    // POST /ventas
+    public function create()
+    {
+        if (!Session::verifyCsrf($_POST['_token'] ?? '')) {
+            http_response_code(419); exit('CSRF token inválido');
         }
 
-        // Aquí se puede redirigir al cliente o generar una respuesta de éxito
-    }
+        $idCliente   = isset($_POST['cliente_id']) && $_POST['cliente_id'] !== '' ? (int)$_POST['cliente_id'] : null;
+        $idEmpleado  = (int) (Auth::userId() ?? 0);
 
-    // Listar ventas por fecha
-    public function index() {
-        $registroVenta = new RegistroVenta($this->db);
-        $ventas = $registroVenta->all('', "start=2025-10-01&end=2025-10-31");        
-        $this->view('ventas/index', ['ventas' => $ventas]);
+        // Esperamos arrays plato_id[], cantidad[], precio[]
+        $platoIds  = isset($_POST['plato_id']) ? (array)$_POST['plato_id'] : [];
+        $cantidades= isset($_POST['cantidad']) ? (array)$_POST['cantidad'] : [];
+        $precios   = isset($_POST['precio'])   ? (array)$_POST['precio']   : [];
+
+        $items = [];
+        $total = 0.0;
+
+        // Normalizar items
+        $n = max(count($platoIds), count($cantidades), count($precios));
+        for ($i = 0; $i < $n; $i++) {
+            $pid = isset($platoIds[$i]) ? (int)$platoIds[$i] : 0;
+            $qty = isset($cantidades[$i]) ? (float)$cantidades[$i] : 0;
+            $prc = isset($precios[$i]) ? (float)$precios[$i] : 0.0;
+
+            if ($pid > 0 && $qty > 0 && $prc >= 0) {
+                $sub = $qty * $prc;
+                $items[] = ['id_plato'=>$pid, 'cantidad'=>$qty, 'precio'=>$prc, 'subtotal'=>$sub];
+                $total += $sub;
+            }
+        }
+
+        if ($idEmpleado <= 0 || empty($items)) {
+            Session::flash('msg', 'Datos de venta incompletos.');
+            $this->redirect((defined('BASE_URI') ? BASE_URI : '') . '/ventas/registro');
+        }
+
+        try {
+            $this->db->beginTransaction();
+
+            // Inserta cabecera (asumo tabla registro_venta tiene estas columnas)
+            $cab = $this->db->prepare("
+                INSERT INTO registro_venta (fecha_venta, monto_venta, id_cliente, id_empleado, id_cierre)
+                VALUES (NOW(), ?, ?, ?, NULL)
+            ");
+            $cab->execute([$total, $idCliente, $idEmpleado]);
+            $idVenta = (int)$this->db->lastInsertId();
+
+            // Inserta detalles (asumo tabla detalle_venta)
+            $det = $this->db->prepare("
+                INSERT INTO detalle_venta (id_venta, id_plato, cantidad, precio_unitario, subtotal)
+                VALUES (?,?,?,?,?)
+            ");
+            foreach ($items as $it) {
+                $det->execute([$idVenta, $it['id_plato'], $it['cantidad'], $it['precio'], $it['subtotal']]);
+            }
+
+            $this->db->commit();
+
+            Session::flash('msg', 'Venta registrada correctamente.');
+            // Redirige al detalle de la venta o a la pantalla de registro
+            $this->redirect((defined('BASE_URI') ? BASE_URI : '') . '/detalle_venta/' . $idVenta);
+
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) { $this->db->rollBack(); }
+            error_log('[venta] ' . $e->getMessage());
+            Session::flash('msg', 'Error al registrar la venta.');
+            $this->redirect((defined('BASE_URI') ? BASE_URI : '') . '/ventas/registro');
+        }
     }
 }

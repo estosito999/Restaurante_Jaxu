@@ -3,175 +3,95 @@ namespace App\Controllers;
 
 use Core\Controller;
 use Core\Session;
-use Core\Auth;
-use App\Models\Factura;
+use Core\Database;
 
-class FacturaController extends Controller {
-    private \PDO $db;
-    public function __construct() { 
-        global $pdo; 
-        $this->db = $pdo; 
-        Auth::requireLogin(); 
-        Auth::requireRole(['admin','cajero','mesero']);
-    }
-
+class FacturaController extends Controller
+{
     public function create() {
-        $clientes = $this->db->query("SELECT id_cliente, nombre, apellido, nit FROM cliente ORDER BY nombre")->fetchAll();
-        $platos   = $this->db->query("SELECT id_plato, nombre, precio, categoria FROM plato ORDER BY categoria, nombre")->fetchAll();
-        $this->view('facturas/create', [
-            'csrf' => \Core\Session::getCsrf(),
-            'clientes' => $clientes,
-            'platos' => $platos
-        ]);
+        $db = Database::getInstance();
+        $clientes = $db->query("SELECT id_cliente,nombre,apellido,nit FROM cliente ORDER BY nombre")->fetchAll();
+        $items    = $db->query("SELECT id_plato,nombre,precio,stock FROM plato_bebidas ORDER BY nombre")->fetchAll();
+        return $this->view('facturas/create', ['clientes'=>$clientes, 'items'=>$items, 'flash'=>Session::flash('msg')]);
     }
 
     public function store() {
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
+        if (!Session::checkCsrf($_POST['_token'] ?? '')) return $this->redirect('/facturas/crear');
 
-        $idCliente = (int)($_POST['id_cliente'] ?? 0);
-        $ids   = $_POST['id_plato'] ?? [];
-        $cants = $_POST['cantidad'] ?? [];
-        // Ignoraremos precios enviados y re-leeremos desde DB
-        $n = count($ids);
+        $db   = Database::getInstance();
+        $db->beginTransaction();
+        try {
+            $idCliente  = (int)($_POST['id_cliente'] ?? 0);
+            $idEmpleado = (int)(\Core\Session::get('user_id') ?? 0);
+            $fecha      = date('Y-m-d H:i:s');
 
-        // Carga precios oficiales
-        $map = []; // id_plato => [precio, nombre]
-        $rows = $this->db->query("SELECT id_plato, nombre, precio FROM plato")->fetchAll();
-        foreach ($rows as $r) { $map[(int)$r['id_plato']] = ['precio'=>(float)$r['precio'], 'nombre'=>$r['nombre']]; }
+            // 1) Crear cabecera
+            $st = $db->prepare("INSERT INTO factura (fecha_hora, estado, monto_total, id_cliente, id_empleado)
+                                VALUES (:fh, 'activa', 0, :cli, :emp)");
+            $st->execute([':fh'=>$fecha, ':cli'=>$idCliente, ':emp'=>$idEmpleado]);
+            $idFactura = (int)$db->lastInsertId();
 
-        $items = [];
-        for ($i=0; $i<$n; $i++) {
-            $pid = (int)$ids[$i];
-            $qty = (int)$cants[$i];
-            if ($qty <= 0 || !isset($map[$pid])) continue;
-            $items[] = ['id_plato'=>$pid, 'cantidad'=>$qty, 'precio_unitario'=>$map[$pid]['precio']];
+            // 2) Agregar detalles
+            $total = 0;
+            $det = $db->prepare("INSERT INTO detalle_venta (id_factura,id_plato,cantidad,precio_unitario,subtotal)
+                                 VALUES (:f,:p,:c,:pu,:st)");
+            $updStock = $db->prepare("UPDATE plato_bebidas SET stock = stock - :c WHERE id_plato=:p AND stock >= :c");
+
+            $items = $_POST['items'] ?? []; // espera: items[][] con id_plato, cantidad, precio_unitario
+            foreach ($items as $it) {
+                $idPlato = (int)$it['id_plato'];
+                $cant    = (int)$it['cantidad'];
+                $precioU = (float)$it['precio_unitario'];
+                $sub     = round($cant * $precioU, 2);
+
+                $det->execute([':f'=>$idFactura, ':p'=>$idPlato, ':c'=>$cant, ':pu'=>$precioU, ':st'=>$sub]);
+                $updStock->execute([':c'=>$cant, ':p'=>$idPlato]);
+                $total += $sub;
+            }
+
+            // 3) Actualizar total
+            $db->prepare("UPDATE factura SET monto_total=:t WHERE id_factura=:id")
+               ->execute([':t'=>$total, ':id'=>$idFactura]);
+
+            // 4) Registrar venta (si hay caja abierta)
+            $ap = $db->query("SELECT id_apertura FROM apertura_caja WHERE estado='abierta' ORDER BY id_apertura DESC LIMIT 1")->fetch();
+            $idApertura = $ap ? (int)$ap['id_apertura'] : null;
+
+            $rv = $db->prepare("INSERT INTO registro_venta (id_factura,id_apertura,id_empleado,fecha_venta,monto_venta)
+                                VALUES (:f,:a,:e,:fv,:m)");
+            $rv->execute([
+                ':f'=>$idFactura, ':a'=>$idApertura, ':e'=>$idEmpleado,
+                ':fv'=>$fecha, ':m'=>$total
+            ]);
+
+            $db->commit();
+            return $this->redirect('/facturas/'.$idFactura);
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            Session::flash('msg','No se pudo registrar la factura: '.$e->getMessage());
+            return $this->redirect('/facturas/crear');
         }
-        if (empty($items)) {
-            Session::flash('msg','Debe agregar al menos un plato.');
-            $this->redirect('/facturas/crear');
-        }
-
-        $facturaModel = new Factura($this->db);
-        $idFactura = $facturaModel->createFactura($idCliente, Auth::userId(), date('Y-m-d H:i:s'), $items, 0.13);
-
-        Session::flash('msg','Factura creada');
-        $this->redirect('/facturas/' . $idFactura);
     }
 
     public function show($id) {
-        $factura = (new Factura($this->db))->getFactura((int)$id);
-        if (!$factura) { http_response_code(404); exit('Factura no encontrada'); }
-        $this->view('facturas/show', ['factura' => $factura]);
+        $db = Database::getInstance();
+        $cab = $db->prepare("SELECT f.*, c.nombre AS cliente_nombre, c.apellido AS cliente_apellido,
+                                    e.nombre AS empleado_nombre, e.apellido AS empleado_apellido
+                             FROM factura f
+                             LEFT JOIN cliente  c ON c.id_cliente  = f.id_cliente
+                             LEFT JOIN empleado e ON e.id_empleado = f.id_empleado
+                             WHERE f.id_factura=:id");
+        $cab->execute([':id'=>$id]);
+        $factura = $cab->fetch();
+
+        if (!$factura) return $this->redirect('/facturas/crear');
+
+        $det = $db->prepare("SELECT d.*, p.nombre AS plato
+                             FROM detalle_venta d
+                             LEFT JOIN plato_bebidas p ON p.id_plato = d.id_plato
+                             WHERE d.id_factura=:id");
+        $det->execute([':id'=>$id]);
+        $items = $det->fetchAll();
+
+        return $this->view('facturas/show', ['factura'=>$factura, 'items'=>$items]);
     }
-
-    /** Ticket HTML 80mm listo para impresora térmica (imprime desde navegador) */
-    public function ticket($id) {
-        $factura = (new Factura($this->db))->getFactura((int)$id);
-        if (!$factura) { http_response_code(404); exit('Factura no encontrada'); }
-        $this->view('facturas/ticket', ['factura' => $factura]);
-    }
-
-    /** Exporta PDF (usa FPDF). Requiere app/lib/fpdf.php */
-        // app/controllers/FacturaController.php  (método pdf)
-    public function pdf($id) {
-        $factura = (new \App\Models\Factura($this->db))->getFactura((int)$id);
-        if (!$factura) { http_response_code(404); exit('Factura no encontrada'); }
-
-        $fpdfPath = dirname(__DIR__,1) . '/lib/fpdf.php'; // app/lib/fpdf.php
-        if (!is_file($fpdfPath)) {
-            http_response_code(500);
-            echo "Falta la librería FPDF (colócala en app/lib/fpdf.php)";
-            return;
-        }
-        require_once $fpdfPath;
-
-        $items = $factura['detalles'] ?? [];
-        $lineCount = max(1, count($items));
-        $height = 80 + ($lineCount * 6) + 40; // alto aproximado
-
-        $w = 80; // 80mm
-        $pdf = new \FPDF('P','mm', [$w, $height]);
-        $pdf->AddPage();
-        $pdf->SetMargins(4, 4, 4);
-
-        // ================================
-        // (AQUÍ) SELLO ANULADA (si aplica)
-        // ================================
-        if (($factura['estado'] ?? 'activa') === 'anulada') {
-            $pdf->SetFont('Arial','B',16);
-            $pdf->SetTextColor(220, 20, 60); // rojo
-            // Imprime una línea centrada; va antes del resto del contenido
-            $pdf->Cell(0, 8, '*** ANULADA ***', 0, 1, 'C');
-            $pdf->Ln(2);
-            // Restablece color para el resto
-            $pdf->SetTextColor(0, 0, 0);
-        }
-
-        // Header
-        $pdf->SetFont('Arial','B',12);
-        $pdf->Cell(0,6, 'JAXU — Restaurante',0,1,'C');
-        $pdf->SetFont('Arial','',9);
-        $pdf->Cell(0,5, 'Factura #'.$factura['id_factura'],0,1,'C');
-        $pdf->Cell(0,4, $factura['fecha_hora'],0,1,'C');
-        $pdf->Ln(2);
-
-        // Cliente / Empleado
-        $pdf->SetFont('Arial','',9);
-        $pdf->Cell(0,4,'Cliente: '.trim(($factura['cliente_nombre']??'').' '.($factura['cliente_apellido']??'')),0,1);
-        if (!empty($factura['cliente_nit'])) $pdf->Cell(0,4,'NIT/CI: '.$factura['cliente_nit'],0,1);
-        $pdf->Cell(0,4,'Atiende: '.trim(($factura['empleado_nombre']??'').' '.($factura['empleado_apellido']??'')),0,1);
-        $pdf->Ln(2);
-
-        // Detalle
-        $pdf->SetFont('Arial','B',9);
-        $pdf->Cell(12,5,'Cant',0,0,'L');
-        $pdf->Cell(40,5,'Plato',0,0,'L');
-        $pdf->Cell(0,5,'Importe',0,1,'R');
-
-        $pdf->SetFont('Arial','',9);
-        foreach ($items as $d) {
-            $line = number_format((float)$d['subtotal'],2);
-            $pdf->Cell(12,5,(int)$d['cantidad'],0,0,'L');
-            $pdf->Cell(40,5,substr($d['plato_nombre'],0,28),0,0,'L');
-            $pdf->Cell(0,5,$line,0,1,'R');
-        }
-        $pdf->Ln(1);
-        $pdf->Cell(0,0,'','T',1); // línea
-
-        // Totales
-        $pdf->SetFont('Arial','',9);
-        $pdf->Cell(40,5,'Subtotal',0,0,'L');
-        $pdf->Cell(0,5,number_format((float)$factura['subtotal'],2),0,1,'R');
-        $pdf->Cell(40,5,'IVA 13%',0,0,'L');
-        $pdf->Cell(0,5,number_format((float)$factura['iva'],2),0,1,'R');
-        $pdf->SetFont('Arial','B',10);
-        $pdf->Cell(40,6,'TOTAL',0,0,'L');
-        $pdf->Cell(0,6,number_format((float)$factura['total'],2),0,1,'R');
-
-        // Pie
-        $pdf->Ln(2);
-        $pdf->SetFont('Arial','',8);
-        $pdf->Cell(0,4,'Gracias por su preferencia',0,1,'C');
-
-        $pdf->Output('I', 'factura_'.$factura['id_factura'].'.pdf'); // Inline
-    }
-
-
-    public function anular($id) {
-        \Core\Auth::requireRole(['admin','cajero']);
-        if (!\Core\Session::checkCsrf($_POST['_csrf'] ?? '')) { http_response_code(419); exit('CSRF'); }
-
-        $idFactura = (int)$id;
-        $motivo = trim($_POST['motivo'] ?? '');
-
-        try {
-            $model = new \App\Models\Factura($this->db);
-            $model->cancelFactura($idFactura, \Core\Auth::userId(), $motivo !== '' ? $motivo : null);
-            \Core\Session::flash('msg', 'Factura anulada correctamente.');
-        } catch (\Throwable $e) {
-            \Core\Session::flash('msg', 'No se pudo anular: ' . $e->getMessage());
-        }
-        $this->redirect('/facturas/' . $idFactura);
-    }
-
 }
